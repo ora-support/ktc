@@ -15,9 +15,9 @@ AS
                        errcode       IN OUT NOCOPY INTEGER,
                        p_file_name   IN            NUMBER)
    IS
-      TmpVar   NUMBER;
+      tmpvar   NUMBER;
    BEGIN
-      TmpVar := p_file_name;
+      tmpvar := p_file_name;
    END;
 END KTC_CA002_LOAD_CARD_PKG;
 /
