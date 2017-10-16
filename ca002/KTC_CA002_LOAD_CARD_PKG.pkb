@@ -1,4 +1,4 @@
-/* Formatted on 10/16/2017 9:01:11 AM (QP5 v5.256.13226.35538) */
+/* Formatted on 10/16/2017 10:31:18 AM (QP5 v5.256.13226.35538) */
 CREATE OR REPLACE PACKAGE BODY APPS.KTC_CA002_LOAD_CARD_PKG
 AS
    /******************************************************************************
@@ -11,13 +11,74 @@ AS
       1.0        10/11/2017      spw@ice       1. Created this package body.
    ******************************************************************************/
 
-   PROCEDURE start_up (errbuf        IN OUT NOCOPY VARCHAR2,
-                       errcode       IN OUT NOCOPY INTEGER,
-                       p_file_name   IN            NUMBER)
+   PROCEDURE start_up (errbuf      IN OUT NOCOPY VARCHAR2,
+                       errcode     IN OUT NOCOPY INTEGER,
+                       p_file_id   IN            NUMBER)
    IS
       tmpvar   NUMBER;
    BEGIN
-      tmpvar := p_file_name;
+      tmpvar := p_file_id;
+   END;
+
+   FUNCTION read_file (p_request_id IN NUMBER, p_file_id IN NUMBER)
+      RETURN ktc_temp_tbl_type
+   IS
+      l_blob          BLOB;
+      --l_blob_len      INTEGER;
+      l_blob_fnme     VARCHAR2 (200);
+      l_line_stream   VARCHAR2 (32767);
+      l_string        VARCHAR2 (32767);
+      l_clob          CLOB;
+      c_line          NUMBER;
+      c_str           NUMBER := 1;
+      c_len           NUMBER;
+      c_pos           NUMBER;
+
+      l_lines         ktc_ca002_load_card_pkg.ktc_temp_tbl_type;
+      l_lines_rec     ktc_ca002_load_card_pkg.ktc_temp_rec_type;
+   BEGIN
+      SELECT file_name, file_data
+        INTO l_blob_fnme, l_blob
+        FROM FND_LOBS
+       WHERE FILE_ID = p_file_id;
+
+      l_clob := BLob_to_CLob (l_blob);
+
+      SELECT LENGTH (l_clob) - LENGTH (REPLACE (l_clob, CHR (13)))
+        INTO c_line
+        FROM DUAL;
+
+      FOR j IN 1 .. c_line / 350
+      LOOP
+         c_len :=
+            INSTR (l_string,
+                   CHR (13),
+                   1,
+                   10);
+
+         FOR i IN 1 .. c_line
+         LOOP
+            l_string := SUBSTR (l_clob, c_str, LENGTH (l_clob));
+            c_pos := INSTR (l_string, CHR (13));
+
+            l_line_stream := SUBSTR (l_string, 1, c_pos);
+            c_str := c_str + c_pos + 1;
+
+            IF i <> 1
+            THEN
+               l_lines_rec.batch_name :=
+                  RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                        '[^,]*,',
+                                        1,
+                                        1),
+                         ',');
+               l_lines_rec.created_by := 1101;
+               l_lines (i - 2) := l_lines_rec;
+            END IF;
+         END LOOP;
+      END LOOP;
+
+      RETURN l_lines;
    END;
 
    FUNCTION BLob_to_CLob (i_blob IN BLOB)
