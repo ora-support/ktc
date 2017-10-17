@@ -1,4 +1,4 @@
-/* Formatted on 10/17/2017 10:45:07 PM (QP5 v5.256.13226.35538) */
+/* Formatted on 10/17/2017 10:51:48 PM (QP5 v5.256.13226.35538) */
 CREATE OR REPLACE PACKAGE BODY APPS.KTC_CA002_LOAD_CARD_PKG
 AS
    /******************************************************************************
@@ -20,6 +20,8 @@ AS
       g_conc_req_id   PLS_INTEGER := fnd_global.conc_request_id;
 
       l_lines         ktc_ca002_load_card_pkg.ktc_temp_tbl_type;
+      
+      l_insert_temp_flag BOOLEAN;
    BEGIN
       write_log ('USER_ID : ' || g_user_id, 'LOG');
       write_log ('USER_LOGIN_ID : ' || g_login_id, 'LOG');
@@ -30,6 +32,11 @@ AS
          'Call read_file(' || g_conc_req_id || ', ' || p_file_id || ')',
          'LOG');
       l_lines := read_file (g_conc_req_id, p_file_id);
+
+      IF l_lines IS NOT NULL
+      THEN
+         l_insert_temp_flag := insert_rec_to_temp (l_lines);
+      END IF;
 
       write_log ('rows count : ' || l_lines.COUNT, 'LOG');
    END;
@@ -65,14 +72,15 @@ AS
       SELECT LENGTH (l_clob) - LENGTH (REPLACE (l_clob, CHR (13)))
         INTO c_line
         FROM DUAL;
-
-      FOR j IN 1 .. c_line
+        
+      write_log ('C_LINE ' || c_line, 'LOG');
+      /*FOR j IN 1 .. c_line 
       LOOP
          c_len :=
             INSTR (l_string,
                    CHR (13),
                    1,
-                   10);
+                   10);*/
 
          FOR i IN 1 .. c_line
          LOOP
@@ -86,6 +94,7 @@ AS
             THEN
                l_lines_rec.file_id := p_file_id;
                l_lines_rec.file_name := l_blob_fnme;
+               l_lines_rec.request_id := p_request_id;
                l_lines_rec.batch_name :=
                   RTRIM (REGEXP_SUBSTR (l_line_stream,
                                         '[^,]*,',
@@ -227,14 +236,15 @@ AS
                                         23),
                          ',');
                l_lines_rec.error_flag := 'N';
-
+               l_lines_rec.user_login_id := fnd_global.login_id;
                l_lines_rec.created_by := fnd_global.user_id;
                l_lines_rec.last_updated_by := fnd_global.user_id;
                l_lines (i - 2) := l_lines_rec;
-               write_log ('', 'OUT');
+               write_log ('BATCH_NAME' ||l_lines_rec.batch_name, 'OUT');
+               write_log ('JOURNAL_NAME' ||l_lines_rec.journal_name, 'OUT');
             END IF;
          END LOOP;
-      END LOOP;
+      --END LOOP;
 
       RETURN l_lines;
    END;
@@ -282,13 +292,14 @@ AS
       RETURN BOOLEAN
    IS
    BEGIN
-      --- delete APPS.SEC_ASSET_TEMP where asset_seq = :file_name;
-
       IF (NVL (p_lines_in.LAST, 0) > 0)
       THEN
          FOR i IN p_lines_in.FIRST .. p_lines_in.LAST
          LOOP
+            
+            write_log ('Insert to temp '||p_lines_in (i).batch_name, 'OUT');
             INSERT INTO APPS.ktc_ca002_load_card_temp (transaction_id,
+                                                       request_id,
                                                        file_id,
                                                        file_name,
                                                        batch_name,
@@ -314,13 +325,13 @@ AS
                                                        line_desc,
                                                        voucher_no_out,
                                                        line_no_out,
-                                                       creation_date,
                                                        created_by,
-                                                       last_update_date,
                                                        last_updated_by,
+                                                       user_login_id,
                                                        error_flag,
                                                        error_message)
                  VALUES (p_lines_in (i).transaction_id,
+                         p_lines_in (i).request_id,
                          p_lines_in (i).file_id,
                          p_lines_in (i).file_name,
                          p_lines_in (i).batch_name,
@@ -346,10 +357,9 @@ AS
                          p_lines_in (i).line_desc,
                          p_lines_in (i).voucher_no_out,
                          p_lines_in (i).line_no_out,
-                         p_lines_in (i).creation_date,
                          p_lines_in (i).created_by,
-                         p_lines_in (i).last_update_date,
                          p_lines_in (i).last_updated_by,
+                         p_lines_in (i).user_login_id,
                          p_lines_in (i).error_flag,
                          p_lines_in (i).error_message);
          END LOOP;
