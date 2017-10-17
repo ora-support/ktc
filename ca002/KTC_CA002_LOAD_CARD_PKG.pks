@@ -62,5 +62,5 @@ AS
       RETURN CLOB;
 
    PROCEDURE write_log (buff VARCHAR2, which VARCHAR2);
-END KTC_CA002_LOAD_CARD_PKG;
+END ktc_ca002_load_card_pkg;
 /
