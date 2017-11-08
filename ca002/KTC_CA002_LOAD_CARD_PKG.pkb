@@ -1,4 +1,4 @@
-/* Formatted on 10/17/2017 10:51:48 PM (QP5 v5.256.13226.35538) */
+/* Formatted on 11/2/2017 12:15:28 PM (QP5 v5.256.13226.35538) */
 CREATE OR REPLACE PACKAGE BODY APPS.KTC_CA002_LOAD_CARD_PKG
 AS
    /******************************************************************************
@@ -15,21 +15,30 @@ AS
                        errcode     IN OUT NOCOPY INTEGER,
                        p_file_id   IN            NUMBER)
    IS
-      g_user_id       PLS_INTEGER := fnd_global.user_id;
-      g_login_id      PLS_INTEGER := fnd_global.login_id;
-      g_conc_req_id   PLS_INTEGER := fnd_global.conc_request_id;
+      g_user_id            PLS_INTEGER := fnd_global.user_id;
+      g_login_id           PLS_INTEGER := fnd_global.login_id;
+      g_conc_req_id        PLS_INTEGER := fnd_global.conc_request_id;
 
-      l_lines         ktc_ca002_load_card_pkg.ktc_temp_tbl_type;
-      
-      l_insert_temp_flag BOOLEAN;
+      l_lines              ktc_ca002_load_card_pkg.ktc_temp_tbl_type;
+
+      l_insert_temp_flag   BOOLEAN := FALSE;
+      l_validation_flag    BOOLEAN := FALSE;
    BEGIN
-      write_log ('USER_ID : ' || g_user_id, 'LOG');
-      write_log ('USER_LOGIN_ID : ' || g_login_id, 'LOG');
-      write_log ('REQUEST_ID : ' || g_conc_req_id, 'LOG');
-      write_log ('P_FILE_ID : ' || p_file_id || CHR (10), 'LOG');
+      write_log ('USER_ID :' || g_user_id, 'LOG');
+      write_log ('USER_LOGIN_ID :' || g_login_id, 'LOG');
+      write_log ('REQUEST_ID :' || g_conc_req_id, 'LOG');
+      write_log ('P_FILE_ID :' || p_file_id || CHR (10), 'LOG');
+      write_log (
+         '==============================================================',
+         'LOG');
 
       write_log (
-         'Call read_file(' || g_conc_req_id || ', ' || p_file_id || ')',
+            '*Call read_file('
+         || g_conc_req_id
+         || ', '
+         || p_file_id
+         || ') at: '
+         || TO_CHAR (SYSDATE, 'DD-MON-YYYY HH24:MI:SS'),
          'LOG');
       l_lines := read_file (g_conc_req_id, p_file_id);
 
@@ -38,14 +47,16 @@ AS
          l_insert_temp_flag := insert_rec_to_temp (l_lines);
       END IF;
 
-      write_log ('rows count : ' || l_lines.COUNT, 'LOG');
+      IF (l_insert_temp_flag)
+      THEN
+         l_validation_flag := validation_data (g_conc_req_id);
+      END IF;
    END;
 
    FUNCTION read_file (p_request_id IN NUMBER, p_file_id IN NUMBER)
       RETURN ktc_temp_tbl_type
    IS
       l_blob          BLOB;
-      --l_blob_len      INTEGER;
       l_blob_fnme     VARCHAR2 (200);
       l_line_stream   VARCHAR2 (32767);
       l_string        VARCHAR2 (32767);
@@ -58,193 +69,178 @@ AS
       l_lines         ktc_ca002_load_card_pkg.ktc_temp_tbl_type;
       l_lines_rec     ktc_ca002_load_card_pkg.ktc_temp_rec_type;
    BEGIN
-      write_log ('Start up time : ' || TO_CHAR (SYSDATE, 'HH:MI:SS'), 'LOG');
-
       SELECT file_name, file_data
         INTO l_blob_fnme, l_blob
         FROM fnd_lobs
        WHERE file_id = p_file_id;
 
-      write_log ('File name : ' || l_blob_fnme, 'LOG');
-      write_log ('Call BLob_to_CLob()', 'LOG');
+      write_log ('  - File name : ' || l_blob_fnme, 'LOG');
       l_clob := BLob_to_CLob (l_blob);
 
       SELECT LENGTH (l_clob) - LENGTH (REPLACE (l_clob, CHR (13)))
         INTO c_line
         FROM DUAL;
-        
-      write_log ('C_LINE ' || c_line, 'LOG');
-      /*FOR j IN 1 .. c_line 
+
+      FOR i IN 1 .. c_line
       LOOP
-         c_len :=
-            INSTR (l_string,
-                   CHR (13),
-                   1,
-                   10);*/
+         l_string := SUBSTR (l_clob, c_str, LENGTH (l_clob));
+         c_pos := INSTR (l_string, CHR (13));
 
-         FOR i IN 1 .. c_line
-         LOOP
-            l_string := SUBSTR (l_clob, c_str, LENGTH (l_clob));
-            c_pos := INSTR (l_string, CHR (13));
+         l_line_stream := SUBSTR (l_string, 1, c_pos);
+         c_str := c_str + c_pos + 1;
 
-            l_line_stream := SUBSTR (l_string, 1, c_pos);
-            c_str := c_str + c_pos + 1;
+         IF i <> 1
+         THEN
+            l_lines_rec.file_id := p_file_id;
+            l_lines_rec.file_name := l_blob_fnme;
+            l_lines_rec.request_id := p_request_id;
+            l_lines_rec.batch_name :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     1),
+                      ',');
+            l_lines_rec.journal_name :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     2),
+                      ',');
+            l_lines_rec.category_name :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     3),
+                      ',');
+            l_lines_rec.gl_date :=
+               TO_DATE (RTRIM (REGEXP_SUBSTR (l_line_stream || ',',
+                                              '[^,]*,',
+                                              1,
+                                              4),
+                               ','),
+                        'DD-MON-YY');
+            l_lines_rec.journal_desc :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     5),
+                      ',');
+            l_lines_rec.currency_code :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     6),
+                      ',');
+            l_lines_rec.journal_line :=
+               TO_NUMBER (RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                                '[^,]*,',
+                                                1,
+                                                7),
+                                 ','));
+            l_lines_rec.company :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     8),
+                      ',');
+            l_lines_rec.rc :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     9),
+                      ',');
+            l_lines_rec.basel :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     10),
+                      ',');
+            l_lines_rec.account :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     11),
+                      ',');
+            l_lines_rec.product :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     12),
+                      ',');
+            l_lines_rec.intercompany :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     13),
+                      ',');
 
-            IF i <> 1
-            THEN
-               l_lines_rec.file_id := p_file_id;
-               l_lines_rec.file_name := l_blob_fnme;
-               l_lines_rec.request_id := p_request_id;
-               l_lines_rec.batch_name :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        1),
-                         ',');
-               l_lines_rec.journal_name :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        2),
-                         ',');
-               l_lines_rec.category_name :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        3),
-                         ',');
-               l_lines_rec.gl_date :=
-                  TO_DATE (RTRIM (REGEXP_SUBSTR (l_line_stream || ',',
-                                                 '[^,]*,',
-                                                 1,
-                                                 4),
-                                  ','),
-                           'DD-MON-YY');
-               l_lines_rec.journal_desc :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        5),
-                         ',');
-               l_lines_rec.currency_code :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        6),
-                         ',');
-               l_lines_rec.journal_line :=
-                  TO_NUMBER (RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                                   '[^,]*,',
-                                                   1,
-                                                   7),
-                                    ','));
-               l_lines_rec.company :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        8),
-                         ',');
-               l_lines_rec.rc :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        9),
-                         ',');
-               l_lines_rec.basel :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        10),
-                         ',');
-               l_lines_rec.account :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        11),
-                         ',');
-               l_lines_rec.product :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        12),
-                         ',');
-               l_lines_rec.intercompany :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        13),
-                         ',');
-
-               l_lines_rec.tax_code :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        14),
-                         ',');
-               l_lines_rec.reserve :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        15),
-                         ',');
-               l_lines_rec.allocation :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        16),
-                         ',');
-               l_lines_rec.entered_dr :=
-                  TO_NUMBER (RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                                   '[^,]*,',
-                                                   1,
-                                                   17),
-                                    ','));
-               l_lines_rec.entered_cr :=
-                  TO_NUMBER (RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                                   '[^,]*,',
-                                                   1,
-                                                   18),
-                                    ','));
-               l_lines_rec.reference_no :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        19),
-                         ',');
-               l_lines_rec.statement_no :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        20),
-                         ',');
-               l_lines_rec.line_desc :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        21),
-                         ',');
-               l_lines_rec.voucher_no_out :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        22),
-                         ',');
-               l_lines_rec.line_no_out :=
-                  RTRIM (REGEXP_SUBSTR (l_line_stream,
-                                        '[^,]*,',
-                                        1,
-                                        23),
-                         ',');
-               l_lines_rec.error_flag := 'N';
-               l_lines_rec.user_login_id := fnd_global.login_id;
-               l_lines_rec.created_by := fnd_global.user_id;
-               l_lines_rec.last_updated_by := fnd_global.user_id;
-               l_lines (i - 2) := l_lines_rec;
-               write_log ('BATCH_NAME' ||l_lines_rec.batch_name, 'OUT');
-               write_log ('JOURNAL_NAME' ||l_lines_rec.journal_name, 'OUT');
-            END IF;
-         END LOOP;
-      --END LOOP;
+            l_lines_rec.tax_code :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     14),
+                      ',');
+            l_lines_rec.reserve :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     15),
+                      ',');
+            l_lines_rec.allocation :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     16),
+                      ',');
+            l_lines_rec.entered_dr :=
+               TO_NUMBER (RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                                '[^,]*,',
+                                                1,
+                                                17),
+                                 ','));
+            l_lines_rec.entered_cr :=
+               TO_NUMBER (RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                                '[^,]*,',
+                                                1,
+                                                18),
+                                 ','));
+            l_lines_rec.reference_no :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     19),
+                      ',');
+            l_lines_rec.statement_no :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     20),
+                      ',');
+            l_lines_rec.line_desc :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     21),
+                      ',');
+            l_lines_rec.voucher_no_out :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     22),
+                      ',');
+            l_lines_rec.line_no_out :=
+               RTRIM (REGEXP_SUBSTR (l_line_stream,
+                                     '[^,]*,',
+                                     1,
+                                     23),
+                      ',');
+            l_lines_rec.error_flag := 'N';
+            l_lines_rec.user_login_id := fnd_global.login_id;
+            l_lines_rec.created_by := fnd_global.user_id;
+            l_lines_rec.last_updated_by := fnd_global.user_id;
+            l_lines (i - 2) := l_lines_rec;
+         END IF;
+      END LOOP;
 
       RETURN l_lines;
    END;
@@ -265,8 +261,7 @@ AS
             RETURN EMPTY_CLOB ();
          END IF;
 
-         DBMS_LOB.createTemporary (lob_loc => o_clob, cache => FALSE); -- read into buffer cache
-         -- write_log('test1', 'line');
+         DBMS_LOB.createTemporary (lob_loc => o_clob, cache => FALSE);
          DBMS_LOB.CONVERTTOCLOB (dest_lob       => o_clob,
                                  src_blob       => i_blob,
                                  amount         => DBMS_LOB.LOBMAXSIZE,
@@ -275,7 +270,6 @@ AS
                                  blob_csid      => DBMS_LOB.DEFAULT_CSID,
                                  lang_context   => i_lang_context,
                                  warning        => i_Warning);
-      -- write_log(i_blob, 'line');
       ELSE
          o_clob := NULL;
          write_log ('clob is null.', 'line');
@@ -296,8 +290,8 @@ AS
       THEN
          FOR i IN p_lines_in.FIRST .. p_lines_in.LAST
          LOOP
-            
-            write_log ('Insert to temp '||p_lines_in (i).batch_name, 'OUT');
+            write_log ('Insert to temp ' || p_lines_in (i).batch_name, 'OUT');
+
             INSERT INTO APPS.ktc_ca002_load_card_temp (transaction_id,
                                                        request_id,
                                                        file_id,
@@ -373,6 +367,73 @@ AS
          RAISE;
    END;
 
+   FUNCTION validation_data (p_request_id IN NUMBER)
+      RETURN BOOLEAN
+   IS
+   BEGIN
+      IF (validate_batches (p_request_id))
+      THEN
+         write_log (
+               '*Completed Validate BATCHES at '
+            || TO_CHAR (SYSDATE, 'DD-MON-YYYY HH24:MI:SS'),
+            'LOG');
+      END IF;
+
+      RETURN TRUE;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         RETURN FALSE;
+   END;
+
+   FUNCTION validate_batches (p_request_id IN NUMBER)
+      RETURN BOOLEAN
+   IS
+      CURSOR c_batchs (l_request_id NUMBER)
+      IS
+           SELECT tmp.request_id,
+                  tmp.file_id,
+                  tmp.file_name,
+                  tmp.batch_name
+             FROM ktc_ca002_load_card_temp tmp
+            WHERE tmp.request_id = l_request_id
+         GROUP BY tmp.request_id,
+                  tmp.file_id,
+                  tmp.file_name,
+                  tmp.batch_name;
+   BEGIN
+      write_log (
+            '*Start Validation BATCHES at: '
+         || TO_CHAR (SYSDATE, 'DD-MON-YYYY HH24:MI:SS'),
+         'LOG');
+      --SELECT gl_ca_je_batches_s.NEXTVAL INTO v_seq_batches FROM DUAL;
+      FOR v_cur IN c_batchs(p_request_id)
+      LOOP
+        write_log ('    - Validation Batches.','LOG');
+            --batch_name || '-' || TO_CHAR (v_sysdate, 'DD/MM/RRRR HH24:MI:SS'
+          INSERT INTO gl_ca_je_batches_temp (je_batch_id, set_of_books_id, name
+                                      , status, budgetary_control_status
+                                      , default_period_name, description
+                                      , show_batch_status, show_bc_status
+                                      , running_total_dr, running_total_cr
+                                      , running_total_accounted_dr
+                                      , running_total_accounted_cr, created_by
+                                      , creation_date, last_update_login
+                                      , last_updated_by, last_update_date)
+          VALUES (p_seq_batch, p_batch.set_of_books_id, p_batch.batch_name, 'P'
+                , 'N', p_batch.period_name, p_batch.transaction_name
+                , p_batch.user_je_source_name, p_batch.user_je_category_name
+                , NULL, NULL, NULL, NULL, p_batch.created_by
+                , p_batch.creation_date, p_batch.last_update_login
+                , p_batch.last_updated_by, p_batch.last_update_date);        
+      END LOOP;
+      RETURN TRUE;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         RETURN FALSE;
+   END;
+
    PROCEDURE write_log (buff VARCHAR2, which VARCHAR2)
    IS
    BEGIN
@@ -382,7 +443,6 @@ AS
       ELSE
          fnd_file.put_line (FND_FILE.OUTPUT, buff);
       END IF;
-   --DBMS_OUTPUT.put_line (Pchar);
    END write_log;
 END KTC_CA002_LOAD_CARD_PKG;
 /
