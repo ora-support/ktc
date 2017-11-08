@@ -1,4 +1,4 @@
-/* Formatted on 11/7/2017 9:50:56 AM (QP5 v5.256.13226.35538) */
+/* Formatted on 11/8/2017 10:32:22 PM (QP5 v5.256.13226.35538) */
 CREATE OR REPLACE PACKAGE APPS.ktc_ca002_load_card_pkg
 AS
    /******************************************************************************
@@ -69,12 +69,21 @@ AS
    FUNCTION validation_data (p_request_id IN NUMBER)
       RETURN BOOLEAN;
 
-   FUNCTION validate_batches (p_request_id IN NUMBER)
+   FUNCTION validate_batches (p_request_id IN NUMBER, o_msg VARCHAR2)
       RETURN BOOLEAN;
+
+   FUNCTION insert_batches (
+      p_temp_row          ktc_ca002_load_card_temp%ROWTYPE,
+      o_je_batch_id   OUT NUMBER)
+      RETURN BOOLEAN;
+
+   PROCEDURE insert_all(p_request_id IN NUMBER, o_msg VARCHAR2);
 
    PROCEDURE update_entered_batch (p_batch_id            NUMBER,
                                    p_batch_entered_dr    NUMBER,
                                    p_batch_entered_cr    NUMBER);
+
+   PROCEDURE keep_errors (p_batch_name VARCHAR2, p_msg VARCHAR2);
 
    PROCEDURE write_log (buff VARCHAR2, which VARCHAR2);
 END ktc_ca002_load_card_pkg;

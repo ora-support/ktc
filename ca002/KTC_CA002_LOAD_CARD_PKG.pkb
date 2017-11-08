@@ -1,4 +1,4 @@
-/* Formatted on 11/2/2017 12:15:28 PM (QP5 v5.256.13226.35538) */
+/* Formatted on 11/8/2017 10:10:32 PM (QP5 v5.256.13226.35538) */
 CREATE OR REPLACE PACKAGE BODY APPS.KTC_CA002_LOAD_CARD_PKG
 AS
    /******************************************************************************
@@ -370,23 +370,50 @@ AS
    FUNCTION validation_data (p_request_id IN NUMBER)
       RETURN BOOLEAN
    IS
+      CURSOR c_batchs (l_request_id NUMBER)
+      IS
+           SELECT tmp.request_id,
+                  tmp.file_id,
+                  tmp.file_name,
+                  tmp.batch_name,
+                  tmp.gl_date
+             FROM ktc_ca002_load_card_temp tmp
+            WHERE tmp.request_id = l_request_id
+         GROUP BY tmp.request_id,
+                  tmp.file_id,
+                  tmp.file_name,
+                  tmp.batch_name,
+                  tmp.gl_date;
+
+      v_valid_batch    BOOLEAN := FALSE;
+      v_valid_header   BOOLEAN := TRUE;
+      v_valid_line     BOOLEAN := TRUE;
+      v_messege        VARCHAR2 (1000);
+
+      l_batch_row      ktc_ca002_load_card_temp%ROWTYPE;
+      l_insert_batch   BOOLEAN;
+      o_je_batch_id    NUMBER;
    BEGIN
-      IF (validate_batches (p_request_id))
+      IF (validate_batches (p_request_id, v_messege))
       THEN
-         write_log (
-               '*Completed Validate BATCHES at '
-            || TO_CHAR (SYSDATE, 'DD-MON-YYYY HH24:MI:SS'),
-            'LOG');
+         v_valid_batch := TRUE;
+      ELSE
+         v_valid_batch := FALSE;
       END IF;
 
-      RETURN TRUE;
+      IF (v_valid_batch AND v_valid_header AND v_valid_line)
+      THEN
+         RETURN TRUE;
+      ELSE
+         RETURN FALSE;
+      END IF;
    EXCEPTION
       WHEN OTHERS
       THEN
          RETURN FALSE;
    END;
 
-   FUNCTION validate_batches (p_request_id IN NUMBER)
+   FUNCTION validate_batches (p_request_id IN NUMBER, o_msg VARCHAR2)
       RETURN BOOLEAN
    IS
       CURSOR c_batchs (l_request_id NUMBER)
@@ -394,44 +421,191 @@ AS
            SELECT tmp.request_id,
                   tmp.file_id,
                   tmp.file_name,
-                  tmp.batch_name
+                  tmp.batch_name,
+                  tmp.gl_date
              FROM ktc_ca002_load_card_temp tmp
             WHERE tmp.request_id = l_request_id
          GROUP BY tmp.request_id,
                   tmp.file_id,
                   tmp.file_name,
-                  tmp.batch_name;
+                  tmp.batch_name,
+                  tmp.gl_date;
+
+      v_temp       ktc_ca002_load_card_temp%ROWTYPE;
+      v_msg        VARCHAR2 (1000);
+      v_err_flag   CHAR (1);
    BEGIN
       write_log (
             '*Start Validation BATCHES at: '
          || TO_CHAR (SYSDATE, 'DD-MON-YYYY HH24:MI:SS'),
          'LOG');
-      --SELECT gl_ca_je_batches_s.NEXTVAL INTO v_seq_batches FROM DUAL;
-      FOR v_cur IN c_batchs(p_request_id)
+
+      FOR v_cur IN c_batchs (p_request_id)
       LOOP
-        write_log ('    - Validation Batches.','LOG');
-            --batch_name || '-' || TO_CHAR (v_sysdate, 'DD/MM/RRRR HH24:MI:SS'
-          INSERT INTO gl_ca_je_batches_temp (je_batch_id, set_of_books_id, name
-                                      , status, budgetary_control_status
-                                      , default_period_name, description
-                                      , show_batch_status, show_bc_status
-                                      , running_total_dr, running_total_cr
-                                      , running_total_accounted_dr
-                                      , running_total_accounted_cr, created_by
-                                      , creation_date, last_update_login
-                                      , last_updated_by, last_update_date)
-          VALUES (p_seq_batch, p_batch.set_of_books_id, p_batch.batch_name, 'P'
-                , 'N', p_batch.period_name, p_batch.transaction_name
-                , p_batch.user_je_source_name, p_batch.user_je_category_name
-                , NULL, NULL, NULL, NULL, p_batch.created_by
-                , p_batch.creation_date, p_batch.last_update_login
-                , p_batch.last_updated_by, p_batch.last_update_date);        
+         v_temp := NULL;
+         v_msg := '';
+         v_err_flag := 'N';
+
+         write_log ('    - Duplicate Batches.', 'LOG');
+
+         BEGIN
+            SELECT name
+              INTO v_temp.batch_name
+              FROM gl_ca_je_batches
+             WHERE name = TRIM (v_cur.batch_name);
+
+            IF v_temp.batch_name IS NOT NULL
+            THEN
+               v_err_flag := 'Y';
+
+               IF v_msg IS NOT NULL
+               THEN
+                  v_msg :=
+                        v_msg
+                     || CHR (10)
+                     || 'Batch : '''
+                     || v_temp.batch_name
+                     || ''' was duplicate.';
+               ELSE
+                  v_msg :=
+                     'Batch : ''' || v_temp.batch_name || ''' was duplicate.';
+               END IF;
+            END IF;
+         EXCEPTION
+            WHEN NO_DATA_FOUND
+            THEN
+               v_err_flag := 'N';
+            WHEN OTHERS
+            THEN
+               v_err_flag := 'Y';
+
+               IF v_msg IS NOT NULL
+               THEN
+                  v_msg := v_msg || CHR (10) || 'Invalid Batch :' || SQLERRM;
+               ELSE
+                  v_msg := 'Invalid Batch :' || SQLERRM;
+               END IF;
+         END;
+
+         IF (v_err_flag = 'Y')
+         THEN
+            keep_errors (v_cur.batch_name, v_msg);
+         END IF;
       END LOOP;
+
       RETURN TRUE;
    EXCEPTION
       WHEN OTHERS
       THEN
+         write_log ('[Validate Batches] : ' || SQLERRM, 'LOG');
          RETURN FALSE;
+   END;
+
+   FUNCTION insert_batches (
+      p_temp_row          ktc_ca002_load_card_temp%ROWTYPE,
+      o_je_batch_id   OUT NUMBER)
+      RETURN BOOLEAN
+   IS
+      --v_seq_batches      NUMBER;
+      g_user_id          PLS_INTEGER := fnd_global.user_id;
+      g_login_id         PLS_INTEGER := fnd_global.login_id;
+      g_set_of_book_id   PLS_INTEGER
+                            := fnd_profile.VALUE ('GL_SET_OF_BKS_ID');
+   BEGIN
+      SELECT gl_ca_je_batches_s.NEXTVAL INTO o_je_batch_id FROM DUAL;
+
+      INSERT INTO gl_ca_je_batches (je_batch_id,
+                                    set_of_books_id,
+                                    name,
+                                    status,
+                                    budgetary_control_status,
+                                    default_period_name,
+                                    description,
+                                    running_total_dr,
+                                    running_total_cr,
+                                    running_total_accounted_dr,
+                                    running_total_accounted_cr,
+                                    created_by,
+                                    creation_date,
+                                    last_update_login,
+                                    last_updated_by,
+                                    last_update_date)
+           VALUES (o_je_batch_id,
+                   g_set_of_book_id,
+                   p_temp_row.batch_name,
+                   'P',
+                   'Y',
+                   TO_CHAR (p_temp_row.gl_date, 'MON-YY'),
+                   p_temp_row.batch_name,
+                   0,
+                   0,
+                   0,
+                   0,
+                   g_user_id,
+                   SYSDATE,
+                   g_login_id,
+                   g_user_id,
+                   SYSDATE);
+
+      COMMIT;
+      RETURN TRUE;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         o_je_batch_id := 0;
+         write_log ('[Insert Batch] :' || SQLERRM, 'LOG');
+         RETURN FALSE;
+   END;
+
+   PROCEDURE update_entered_batch (p_batch_id            NUMBER,
+                                   p_batch_entered_dr    NUMBER,
+                                   p_batch_entered_cr    NUMBER)
+   IS
+   BEGIN
+      UPDATE gl_ca_je_batches
+         SET running_total_dr = p_batch_entered_dr,
+             running_total_cr = p_batch_entered_cr,
+             running_total_accounted_dr = p_batch_entered_dr,
+             running_total_accounted_cr = p_batch_entered_cr
+       WHERE je_batch_id = p_batch_id;
+   END update_entered_batch;
+
+   PROCEDURE keep_errors (p_batch_name VARCHAR2, p_msg VARCHAR2)
+   IS
+      v_msg           VARCHAR2 (3000) := NULL;
+      g_conc_req_id   PLS_INTEGER := fnd_global.conc_request_id;
+   BEGIN
+      FOR r
+         IN (SELECT *
+               FROM ktc_ca002_load_card_temp
+              WHERE     request_id = g_conc_req_id
+                    AND UPPER (TRIM (batch_name)) =
+                           UPPER (TRIM (p_batch_name)))
+      LOOP
+         IF (   LENGTH (TRIM (r.error_message)) <> 0
+             OR r.error_message IS NOT NULL)
+         THEN
+            SELECT DECODE (r.error_message, NULL, CHR (10))
+              INTO v_msg
+              FROM DUAL;
+
+            v_msg := p_msg;
+         ELSIF r.error_message IS NULL
+         THEN
+            v_msg := p_msg;
+         END IF;
+
+
+         UPDATE ktc_ca002_load_card_temp
+            SET error_flag = 'Y', error_message = v_msg
+          WHERE transaction_id = r.transaction_id;
+      END LOOP;
+
+      COMMIT;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         write_log ('[Keep errors] : ' || SQLERRM, 'LOG');
    END;
 
    PROCEDURE write_log (buff VARCHAR2, which VARCHAR2)
